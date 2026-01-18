@@ -3,143 +3,591 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>OpenPGP Decrypt (local)</title>
+  <title>Vault UI (Zero-Knowledge)</title>
   <style>
-    body { font-family: system-ui, sans-serif; margin: 16px; }
-    textarea { width: 100%; height: 140px; }
-    #out { white-space: pre-wrap; border: 1px solid #ccc; padding: 10px; min-height: 120px; }
+    body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 16px; line-height: 1.4; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: 12px; margin: 12px 0; }
     .row { margin: 10px 0; }
+    label { display: inline-block; margin-bottom: 6px; font-weight: 600; }
+    input[type="text"], input[type="password"], textarea, select {
+      width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #ccc; border-radius: 8px;
+    }
+    textarea { height: 140px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    button {
+      padding: 8px 12px; border: 1px solid #ccc; border-radius: 10px; background: #fff; cursor: pointer;
+      margin-right: 8px;
+    }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .hint { font-size: 12px; opacity: .8; }
+    .ok { color: #0a7; font-weight: 700; }
+    .err { color: #c00; font-weight: 700; }
+    ul { padding-left: 18px; }
+    li { margin: 4px 0; }
+    a { color: #06c; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    #status { white-space: pre-wrap; }
+    #outputText { height: 220px; }
+    #preview img { max-width: 100%; border: 1px solid #ccc; border-radius: 8px; }
+    .grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+    @media (min-width: 900px) {
+      .grid { grid-template-columns: 1fr 1fr; }
+    }
   </style>
 </head>
 
 <body>
-  <h2>PGP復号（ローカルHTML）</h2>
+  <h2>Vault UI（GitHub Private + OpenPGP.js）</h2>
+  <div class="hint">
+    ⚠️ トークン/秘密鍵/平文は保存しません（localStorage等は未使用）。ページを閉じると消えます。<br/>
+    推奨：ブラウザ拡張は最小限、信頼できない拡張は無効化。
+  </div>
 
-  <div class="row">
-    <label><b>1) 暗号文ファイル（ASCII armorの .gpg / .asc）</b></label><br/>
-    <input id="msgFile" type="file" />
-    <div style="font-size: 12px; opacity: .8;">
-      先頭が <code>-----BEGIN PGP MESSAGE-----</code> のファイルを選んでください
+  <div class="card">
+    <div class="row">
+      <label>GitHub Fine-grained PAT（Contents: Read/Write / repo: vault のみ）</label>
+      <input id="ghToken" type="password" placeholder="ghp_... (保存しません。毎回入力)" />
+      <div class="hint">※ Private repo の一覧取得・取得・更新に必要。UIコード内に埋め込まないでください。</div>
+    </div>
+
+    <div class="grid">
+      <div>
+        <div class="row">
+          <label>秘密鍵（サブキーのみ推奨：privatekey-subkeys.asc）</label>
+          <textarea id="privKey" placeholder="-----BEGIN PGP PRIVATE KEY BLOCK----- ..."></textarea>
+          <div class="hint">主鍵（masterkey-full.asc）は絶対に貼らない。</div>
+        </div>
+      </div>
+
+      <div>
+        <div class="row">
+          <label>パスフレーズ</label>
+          <input id="pass" type="password" placeholder="秘密鍵のパスフレーズ" />
+        </div>
+
+        <div class="row">
+          <label>Vault 参照先（必要なら変更）</label>
+          <input id="owner" type="text" value="ryotasgsk" />
+          <div class="row">
+            <input id="repo" type="text" value="vault" />
+          </div>
+          <div class="row">
+            <label>ディレクトリ</label>
+            <select id="dir">
+              <option value="notes">notes</option>
+              <option value="images">images</option>
+            </select>
+          </div>
+          <div class="hint">owner/repo/dir は API URL 生成に使います。</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="row">
+      <button id="btnList">一覧を読み込む</button>
+      <button id="btnClear">入力をクリア（トークン/鍵/出力）</button>
+      <span id="listStatus" class="hint"></span>
+    </div>
+
+    <div class="row">
+      <label>Vault ファイル一覧（.gpg のみ）</label>
+      <ul id="filelist"></ul>
+    </div>
+
+    <div class="row">
+      <label>ローカル .gpg を直接復号（任意）</label>
+      <input id="localFile" type="file" />
+      <button id="btnDecryptLocal">ローカルファイルを復号</button>
+      <div class="hint">※ ローカルでもテキスト/画像を自動判別。Private repo を使わないテスト用。</div>
     </div>
   </div>
 
-  <div class="row">
-    <label><b>2) 秘密鍵（ASCII）</b>（貼り付け）</label>
-    <textarea id="privKey" placeholder="-----BEGIN PGP PRIVATE KEY BLOCK----- ..."></textarea>
-  </div>
+  <div class="card">
+    <div class="row">
+      <label>選択中のファイル</label>
+      <input id="currentPath" type="text" readonly />
+      <div class="hint">更新先パス。新規作成もできます（下の「新規保存先」）。</div>
+    </div>
 
-  <div class="row">
-    <label><b>3) パスフレーズ</b></label><br/>
-    <input id="pass" type="password" style="width: 100%;" placeholder="秘密鍵のパスフレーズ" />
-  </div>
+    <div class="row">
+      <label>新規保存先（任意）</label>
+      <input id="newPath" type="text" placeholder='例: notes/newnote.org.gpg  または images/pic.png.gpg' />
+      <div class="hint">空なら「選択中のファイル」を更新。入力すると新規作成（またはそのパスを更新）。</div>
+    </div>
 
-  <div class="row">
-    <button id="btn">Decrypt</button>
-  </div>
+    <div class="row">
+      <button id="btnDecryptRepo" disabled>選択ファイルを復号</button>
+      <button id="btnEncryptText" disabled>テキストを暗号化（PGP MESSAGE）</button>
+      <button id="btnPush" disabled>GitHubへ保存（PUT）</button>
+      <button id="btnDownloadGpg" disabled>.gpg をダウンロード</button>
+      <span id="status" class="hint"></span>
+    </div>
 
-  <h3>結果（平文）</h3>
-  <div id="out"></div>
+    <div class="row">
+      <label>テキスト（編集可）</label>
+      <textarea id="outputText" placeholder="復号されたテキストがここに出ます。編集して再暗号化できます。"></textarea>
+      <div class="hint">画像の場合はここは空のままになります。</div>
+    </div>
+
+    <div class="row">
+      <label>プレビュー（画像）</label>
+      <div id="preview" class="hint">画像の場合のみ表示</div>
+    </div>
+  </div>
 
   <script type="module">
-    // OpenPGP.js (ESM) をCDNから読み込み（バージョン固定推奨）
-    import * as openpgp from "https://cdn.jsdelivr.net/npm/openpgp@6.3.0/dist/openpgp.mjs";
+    import * as openpgp from "./vendor/openpgp.mjs";
 
-    const msgFile = document.getElementById('msgFile');
-    const privKey = document.getElementById('privKey');
-    const pass = document.getElementById('pass');
-    const out = document.getElementById('out');
-    const btn = document.getElementById('btn');
+    // ===== Helpers =====
+    const $ = (id) => document.getElementById(id);
 
-    async function readFileAsText(file) {
-      return await file.text();
+    function setStatus(msg, cls = "") {
+      const el = $("status");
+      el.className = "hint " + cls;
+      el.textContent = msg;
     }
 
-  btn.addEventListener('click', async () => {
-    const out = document.getElementById('out');
-    out.textContent = '';
-
-  try {
-    // === 1. 入力ファイル ===
-    const file = document.getElementById('msgFile').files[0];
-    if (!file) throw new Error("暗号化ファイルを選択してください");
-
-    const armoredMessage = await file.text();
-
-    // === 2. 秘密鍵 ===
-    const privateKeyArmored = document.getElementById('privKey').value.trim();
-    const passphrase = document.getElementById('pass').value;
-
-    if (!privateKeyArmored) {
-      throw new Error("秘密鍵が入力されていません");
+    function setListStatus(msg, cls = "") {
+      const el = $("listStatus");
+      el.className = "hint " + cls;
+      el.textContent = msg;
     }
 
-    const privateKey = await openpgp.readPrivateKey({
-      armoredKey: privateKeyArmored
-    });
+    function isImagePath(path) {
+      return path.endsWith(".png.gpg") || path.endsWith(".jpg.gpg") || path.endsWith(".jpeg.gpg");
+    }
 
-    const decryptedPrivateKey = await openpgp.decryptKey({
-      privateKey,
-      passphrase
-    });
+    function mimeFromPath(path) {
+      if (path.endsWith(".png.gpg")) return "image/png";
+      if (path.endsWith(".jpg.gpg") || path.endsWith(".jpeg.gpg")) return "image/jpeg";
+      return "application/octet-stream";
+    }
 
-    // === 3. メッセージ読み込み ===
-    const message = await openpgp.readMessage({
-      armoredMessage
-    });
-
-    // === 4. ファイル種別判定 ===
-    const isImage =
-      file.name.endsWith('.png.gpg') ||
-      file.name.endsWith('.jpg.gpg') ||
-      file.name.endsWith('.jpeg.gpg');
-
-    if (isImage) {
-      // ===== 画像 =====
-      const { data: binaryData } = await openpgp.decrypt({
-        message,
-        decryptionKeys: decryptedPrivateKey,
-        format: 'binary'
-      });
-
-      const mime =
-        file.name.endsWith('.png.gpg') ? 'image/png' : 'image/jpeg';
-
-      const blob = new Blob([binaryData], { type: mime });
+    function downloadText(filename, text) {
+      const blob = new Blob([text], { type: "text/plain" });
       const url = URL.createObjectURL(blob);
-
-      // 表示
-      const img = document.createElement('img');
-      img.src = url;
-      img.style.maxWidth = '100%';
-      img.style.border = '1px solid #ccc';
-      out.appendChild(img);
-
-      // 保存リンク
-      const a = document.createElement('a');
+      const a = document.createElement("a");
       a.href = url;
-      a.download = file.name.replace(/\.gpg$/, '');
-      a.textContent = '画像を保存';
-      a.style.display = 'block';
-      a.style.marginTop = '8px';
-      out.appendChild(a);
-
-    } else {
-      // ===== テキスト =====
-      const { data: textData } = await openpgp.decrypt({
-        message,
-        decryptionKeys: decryptedPrivateKey,
-        format: 'utf8'
-      });
-
-      out.textContent = textData;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      URL.revokeObjectURL(url);
+      a.remove();
     }
 
-  } catch (e) {
-    out.textContent = "エラー: " + (e.message ?? e);
-  }
-});
+    function downloadBlob(filename, blob) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      URL.revokeObjectURL(url);
+      a.remove();
+    }
 
+    function base64ToString(b64) {
+      // GitHub contents API の content は base64（改行入り）
+      const clean = b64.replace(/\n/g, "");
+      // atob は latin1 を返すが、armor は ASCII なのでこれでOK
+      return atob(clean);
+    }
 
+    function stringToBase64(str) {
+      // armor は ASCII 前提。Unicode文字列を入れる場合は別処理が必要だが、
+      // ここでは「暗号文（ASCII armor）」を push するので問題なし。
+      return btoa(str);
+    }
+
+    async function buildDecryptionKeys() {
+      const armoredPriv = $("privKey").value.trim();
+      const passphrase = $("pass").value;
+
+      if (!armoredPriv) throw new Error("秘密鍵が未入力です（privatekey-subkeys.asc を貼ってください）");
+
+      const privateKey = await openpgp.readPrivateKey({ armoredKey: armoredPriv });
+      const decryptedPrivateKey = await openpgp.decryptKey({
+        privateKey,
+        passphrase
+      });
+
+      return decryptedPrivateKey;
+    }
+
+    async function buildEncryptionKeysFromPrivate() {
+      // 自分宛て暗号化：秘密鍵から公開鍵を導出して encrypt に使う
+      const armoredPriv = $("privKey").value.trim();
+      if (!armoredPriv) throw new Error("秘密鍵が未入力です（暗号化にも必要）");
+
+      const privateKey = await openpgp.readPrivateKey({ armoredKey: armoredPriv });
+      const publicKey = privateKey.toPublic(); // 公開鍵部分を抽出
+      return publicKey;
+    }
+
+    function ghBase() {
+      const owner = $("owner").value.trim();
+      const repo = $("repo").value.trim();
+      if (!owner || !repo) throw new Error("owner / repo が未入力です");
+      return { owner, repo };
+    }
+
+    function apiUrlFor(path) {
+      const { owner, repo } = ghBase();
+      return `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
+    }
+
+    function tokenOrThrow() {
+      const token = $("ghToken").value.trim();
+      if (!token) throw new Error("GitHub Token が未入力です（Fine-grained PAT）");
+      return token;
+    }
+
+    async function ghFetchJson(url, token, options = {}) {
+      const res = await fetch(url, {
+        ...options,
+        headers: {
+          ...(options.headers || {}),
+          "Authorization": `Bearer ${token}`,
+          "Accept": "application/vnd.github+json"
+        }
+      });
+      const text = await res.text();
+      if (!res.ok) {
+        throw new Error(`GitHub API error ${res.status}: ${text}`);
+      }
+      return JSON.parse(text);
+    }
+
+    async function ghListDir(dir) {
+      const token = tokenOrThrow();
+      const url = apiUrlFor(dir);
+      return await ghFetchJson(url, token);
+    }
+
+    async function ghGetFile(path) {
+      const token = tokenOrThrow();
+      const url = apiUrlFor(path);
+      return await ghFetchJson(url, token);
+    }
+
+    async function ghPutFile(path, armoredText, message) {
+      const token = tokenOrThrow();
+      const url = apiUrlFor(path);
+
+      // 既存 sha を取得（なければ新規）
+      let sha = null;
+      try {
+        const meta = await ghGetFile(path);
+        sha = meta.sha || null;
+      } catch (_) {
+        sha = null;
+      }
+
+      const body = {
+        message: message || "update encrypted file",
+        content: stringToBase64(armoredText),
+        ...(sha ? { sha } : {})
+      };
+
+      const res = await fetch(url, {
+        method: "PUT",
+        headers: {
+          "Authorization": `Bearer ${token}`,
+          "Accept": "application/vnd.github+json"
+        },
+        body: JSON.stringify(body)
+      });
+
+      const text = await res.text();
+      if (!res.ok) throw new Error(`GitHub PUT error ${res.status}: ${text}`);
+      return JSON.parse(text);
+    }
+
+    // ===== UI State =====
+    let selected = {
+      path: "",
+      sha: null,
+      armored: ""
+    };
+
+    let lastEncryptedArmored = ""; // ダウンロード/Push 用（ASCII armor の PGP MESSAGE）
+    let lastImageBlob = null;      // 画像プレビュー用
+
+    function resetOutput() {
+      $("outputText").value = "";
+      $("preview").textContent = "画像の場合のみ表示";
+      lastEncryptedArmored = "";
+      lastImageBlob = null;
+      $("btnEncryptText").disabled = true;
+      $("btnPush").disabled = true;
+      $("btnDownloadGpg").disabled = true;
+    }
+
+    function enableAfterSelection() {
+      $("btnDecryptRepo").disabled = !selected.path;
+    }
+
+    // ===== Actions =====
+    async function loadFileList() {
+      resetOutput();
+      setListStatus("一覧取得中…");
+      $("filelist").innerHTML = "";
+
+      try {
+        const dir = $("dir").value;
+        const items = await ghListDir(dir);
+
+        const gpgItems = items
+          .filter(x => x.type === "file")
+          .filter(x => x.name.endsWith(".gpg"));
+
+        if (gpgItems.length === 0) {
+          setListStatus("このディレクトリに .gpg が見つかりません", "err");
+          return;
+        }
+
+        for (const f of gpgItems) {
+          const li = document.createElement("li");
+          const a = document.createElement("a");
+          a.href = "#";
+          a.textContent = f.name;
+          a.onclick = (ev) => {
+            ev.preventDefault();
+            selected.path = f.path; // notes/xxx.gpg
+            selected.sha = f.sha || null;
+            $("currentPath").value = selected.path;
+            setStatus(`選択: ${selected.path}`, "ok");
+            enableAfterSelection();
+          };
+          li.appendChild(a);
+          const small = document.createElement("span");
+          small.className = "hint";
+          small.textContent = "  (" + f.path + ")";
+          li.appendChild(small);
+          $("filelist").appendChild(li);
+        }
+
+        setListStatus(`OK: ${gpgItems.length} 件`, "ok");
+        setStatus("ファイルを選択して「選択ファイルを復号」を押してください。");
+      } catch (e) {
+        setListStatus("一覧取得エラー: " + (e.message || e), "err");
+      }
+    }
+
+    async function decryptArmored(armoredMessage, filenameHint = "file.gpg") {
+      resetOutput();
+      setStatus("復号中…");
+
+      const decryptionKeys = await buildDecryptionKeys();
+      const messageObj = await openpgp.readMessage({ armoredMessage });
+
+      const image = isImagePath(filenameHint);
+
+      if (image) {
+        const { data: binaryData } = await openpgp.decrypt({
+          message: messageObj,
+          decryptionKeys,
+          format: "binary"
+        });
+
+        const blob = new Blob([binaryData], { type: mimeFromPath(filenameHint) });
+        lastImageBlob = blob;
+
+        // preview
+        const url = URL.createObjectURL(blob);
+        const wrap = document.createElement("div");
+        const img = document.createElement("img");
+        img.src = url;
+        wrap.appendChild(img);
+
+        const dl = document.createElement("button");
+        dl.textContent = "復号画像をダウンロード";
+        dl.onclick = () => downloadBlob(filenameHint.replace(/\.gpg$/, ""), blob);
+        wrap.appendChild(document.createElement("div")).appendChild(dl);
+
+        $("preview").innerHTML = "";
+        $("preview").appendChild(wrap);
+
+        setStatus("画像の復号に成功しました。", "ok");
+        // 画像の再暗号化（編集）はこのUIでは扱わない（必要なら次に拡張できます）
+        $("btnEncryptText").disabled = true;
+        $("btnPush").disabled = true;
+        $("btnDownloadGpg").disabled = true;
+        return;
+      }
+
+      // text
+      const { data: textData } = await openpgp.decrypt({
+        message: messageObj,
+        decryptionKeys,
+        format: "utf8"
+      });
+
+      $("outputText").value = textData;
+      $("btnEncryptText").disabled = false;
+      setStatus("テキストの復号に成功しました。編集→「テキストを暗号化」で .gpg を生成できます。", "ok");
+    }
+
+    async function decryptSelectedFromRepo() {
+      if (!selected.path) {
+        setStatus("先に一覧からファイルを選択してください。", "err");
+        return;
+      }
+
+      resetOutput();
+      setStatus("GitHubから取得中…");
+
+      try {
+        const meta = await ghGetFile(selected.path);
+        selected.sha = meta.sha || null;
+
+        if (!meta.content) throw new Error("contents API から content を取得できませんでした。");
+
+        const armored = base64ToString(meta.content);
+        selected.armored = armored;
+
+        await decryptArmored(armored, selected.path);
+      } catch (e) {
+        setStatus("取得/復号エラー: " + (e.message || e), "err");
+      }
+    }
+
+    async function decryptLocalFile() {
+      const file = $("localFile").files?.[0];
+      if (!file) {
+        setStatus("ローカルファイルを選択してください。", "err");
+        return;
+      }
+      try {
+        const armored = await file.text();
+        $("currentPath").value = "(local) " + file.name;
+        selected.path = "";
+        selected.sha = null;
+        selected.armored = armored;
+        await decryptArmored(armored, file.name);
+      } catch (e) {
+        setStatus("ローカル復号エラー: " + (e.message || e), "err");
+      }
+    }
+
+    async function encryptTextToArmored() {
+      const plaintext = $("outputText").value;
+      if (!plaintext) {
+        setStatus("暗号化するテキストが空です。", "err");
+        return;
+      }
+
+      try {
+        setStatus("暗号化中…");
+        const publicKey = await buildEncryptionKeysFromPrivate();
+
+        const message = await openpgp.createMessage({ text: plaintext });
+        const armored = await openpgp.encrypt({
+          message,
+          encryptionKeys: publicKey,
+          format: "armored"
+        });
+
+        lastEncryptedArmored = armored;
+
+        // sanity check
+        if (!armored.startsWith("-----BEGIN PGP MESSAGE-----")) {
+          throw new Error("暗号化形式が PGP MESSAGE ではありません（想定外）。");
+        }
+
+        $("btnPush").disabled = false;
+        $("btnDownloadGpg").disabled = false;
+        setStatus("暗号化OK：PGP MESSAGE を生成しました。GitHubへ保存 or ダウンロードできます。", "ok");
+      } catch (e) {
+        setStatus("暗号化エラー: " + (e.message || e), "err");
+      }
+    }
+
+    async function pushEncryptedToGitHub() {
+      if (!lastEncryptedArmored) {
+        setStatus("先に「テキストを暗号化」を実行してください。", "err");
+        return;
+      }
+
+      // 保存先決定：newPath があれば優先、なければ currentPath
+      const newPath = $("newPath").value.trim();
+      const path = newPath || $("currentPath").value.trim();
+
+      if (!path) {
+        setStatus("保存先パスが空です。ファイルを選択するか、新規保存先を入力してください。", "err");
+        return;
+      }
+      if (path.startsWith("(local)")) {
+        setStatus("ローカルファイル復号の状態です。新規保存先に notes/...gpg を指定してください。", "err");
+        return;
+      }
+      if (!path.endsWith(".gpg")) {
+        setStatus("保存先は .gpg で終わる必要があります。", "err");
+        return;
+      }
+
+      try {
+        setStatus("GitHubへ保存中（PUT）…");
+        const ts = new Date().toISOString();
+        const msg = `vault-ui: update encrypted file (${ts})`;
+
+        await ghPutFile(path, lastEncryptedArmored, msg);
+
+        setStatus("保存成功（GitHubへPUT）しました。", "ok");
+
+        // 一覧再読み込み（同ディレクトリに反映）
+        // 保存先が別ディレクトリなら見えないので注意
+        // 必要ならユーザーが dir を切り替えて再読み込み
+      } catch (e) {
+        setStatus("保存エラー: " + (e.message || e), "err");
+      }
+    }
+
+    function downloadEncryptedGpg() {
+      if (!lastEncryptedArmored) {
+        setStatus("先に「テキストを暗号化」を実行してください。", "err");
+        return;
+      }
+
+      // ファイル名は newPath or currentPath から推定
+      const newPath = $("newPath").value.trim();
+      const path = newPath || $("currentPath").value.trim() || "output.txt.gpg";
+      const filename = path.split("/").pop() || "output.txt.gpg";
+
+      downloadText(filename, lastEncryptedArmored);
+      setStatus(".gpg をダウンロードしました（ASCII armor / PGP MESSAGE）。", "ok");
+    }
+
+    function clearAll() {
+      $("ghToken").value = "";
+      $("privKey").value = "";
+      $("pass").value = "";
+      $("outputText").value = "";
+      $("preview").textContent = "画像の場合のみ表示";
+      $("filelist").innerHTML = "";
+      $("currentPath").value = "";
+      $("newPath").value = "";
+      selected = { path: "", sha: null, armored: "" };
+      lastEncryptedArmored = "";
+      lastImageBlob = null;
+      $("btnDecryptRepo").disabled = true;
+      $("btnEncryptText").disabled = true;
+      $("btnPush").disabled = true;
+      $("btnDownloadGpg").disabled = true;
+      setListStatus("");
+      setStatus("クリアしました。");
+    }
+
+    // ===== Wire up =====
+    $("btnList").addEventListener("click", loadFileList);
+    $("btnDecryptRepo").addEventListener("click", decryptSelectedFromRepo);
+    $("btnDecryptLocal").addEventListener("click", decryptLocalFile);
+    $("btnEncryptText").addEventListener("click", encryptTextToArmored);
+    $("btnPush").addEventListener("click", pushEncryptedToGitHub);
+    $("btnDownloadGpg").addEventListener("click", downloadEncryptedGpg);
+    $("btnClear").addEventListener("click", clearAll);
+
+    // 初期状態
+    setStatus("1) Token/秘密鍵/パスフレーズを入力 → 2) 一覧読み込み → 3) 復号 → 4) 編集 → 暗号化 → 保存");
   </script>
 </body>
 </html>
